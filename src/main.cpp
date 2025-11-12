@@ -39,15 +39,15 @@ Servo servoMotor;
 // Estado actual del motor (inicialmente apagado)
 int valorPWM = microSegundosADutyCycle(PULSE_MIN);
 
-const int SERVO_PIN = 27;
+const int SERVO_PIN = 25;
 #define ESC_PIN 13
 #define DIR_L_PIN 19
 #define STEP_L_PIN 18
-#define DIR_R_PIN 5
-#define STEP_R_PIN 17
+#define DIR_R_PIN 23
+#define STEP_R_PIN 22
 #define ENABLE_STEPPERS 16
 
-const int STEPS_PER_REV = 200;
+// const int STEPS_PER_REV = 200;
 
 void moveServo()
 {
