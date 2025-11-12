@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <ESP32Servo.h>
 
 typedef struct
 {
@@ -14,9 +15,25 @@ typedef struct
 
 ControlData incomingData;
 
+Servo servoMotor;
+
+const int servoPin = 18;
+
+void moveServo()
+{
+  servoMotor.write(180);
+  delay(500);
+  servoMotor.write(0);
+  delay(500);
+}
+
 void onDataReceive(const uint8_t *mac, const uint8_t *incomingDataPtr, int len)
 {
   memcpy(&incomingData, incomingDataPtr, sizeof(incomingData));
+  if (incomingData.btn1)
+  {
+    moveServo();
+  }
   Serial.println("Data received:");
   Serial.print("  Buttons: ");
   Serial.print(incomingData.btn1);
@@ -37,6 +54,7 @@ void setup()
   Serial.begin(115200);
   Serial.println();
   Serial.println("DojoBot");
+  servoMotor.attach(servoPin);
 
   WiFi.mode(WIFI_STA);
 
