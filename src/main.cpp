@@ -2,26 +2,28 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <ESP32Servo.h>
-// #include <AccelStepper.h>
 
-int joy1Y = 0;
-int joy2Y = 0;
-bool isTackling = false;
+// Variables compartidas
+volatile int joy1Y = 0;
+volatile int joy2Y = 0;
+volatile bool isTackling = false;
+volatile int valorPWM;
 
+// Parámetros PWM del ESC
 const int freq = 50;
 const int ledChannel = 0;
 const int resolution = 12;
+const int PULSE_MIN = 1000;
+const int PULSE_VELOCIDAD = 1300;
+const int PULSE_MAX = 2000;
 
-// Pulso en microsegundos (μs)
-const int PULSE_MIN = 1000;       // Apagado/Mínimo
-const int PULSE_VELOCIDAD = 1300; // Velocidad de prueba
-const int PULSE_MAX = 2000;       // Máximo (para Calibración)
-
+// Conversión de microsegundos a duty cycle
 int microSegundosADutyCycle(int microsegundos)
 {
   return (int)((float)microsegundos / 20000.0 * (1 << resolution));
 }
 
+// Estructura de datos ESP-NOW
 typedef struct
 {
   bool btn1;
@@ -33,22 +35,27 @@ typedef struct
 } ControlData;
 
 ControlData incomingData;
-
 Servo servoMotor;
 
-// Estado actual del motor (inicialmente apagado)
-int valorPWM = microSegundosADutyCycle(PULSE_MIN);
-
+// Pines
 const int SERVO_PIN = 25;
 #define ESC_PIN 13
 #define DIR_L_PIN 19
 #define STEP_L_PIN 18
 #define DIR_R_PIN 23
 #define STEP_R_PIN 22
-#define ENABLE_STEPPERS 16
+#define ENABLE_STEPPER_L 21
+#define ENABLE_STEPPER_R 5
 
-// const int STEPS_PER_REV = 200;
+// Control del motor brushless (ESC)
+void setBrushlessSpeed(int microseconds)
+{
+  microseconds = constrain(microseconds, PULSE_MIN, PULSE_MAX);
+  valorPWM = microSegundosADutyCycle(microseconds);
+  ledcWrite(ledChannel, valorPWM);
+}
 
+// Movimiento del servo (pala)
 void moveServo()
 {
   servoMotor.write(180);
@@ -57,134 +64,138 @@ void moveServo()
   delay(500);
 }
 
+// Embestida (placaje)
 void tackle()
 {
   isTackling = true;
+
   digitalWrite(DIR_L_PIN, HIGH);
   digitalWrite(DIR_R_PIN, HIGH);
-  digitalWrite(STEP_L_PIN, HIGH);
-  digitalWrite(STEP_R_PIN, HIGH);
-  delay(400);
+
+  // Movimiento hacia adelante durante la embestida
+  for (int i = 0; i < 300; i++)
+  {
+    digitalWrite(STEP_L_PIN, HIGH);
+    digitalWrite(STEP_R_PIN, HIGH);
+    delayMicroseconds(500);
+    digitalWrite(STEP_L_PIN, LOW);
+    digitalWrite(STEP_R_PIN, LOW);
+    delayMicroseconds(500);
+  }
+
   moveServo();
   isTackling = false;
 }
 
+// Callback de recepción ESP-NOW
 void onDataReceive(const uint8_t *mac, const uint8_t *incomingDataPtr, int len)
 {
-  memcpy(&incomingData, incomingDataPtr, sizeof(incomingData));
-
-  joy1Y = incomingData.joy1;
-  joy2Y = incomingData.joy2;
-  if (joy1Y > 0)
-
+  if (len == sizeof(ControlData))
   {
-    digitalWrite(DIR_L_PIN, HIGH);
-  }
-  else if (joy1Y < 0)
-  {
-    digitalWrite(DIR_L_PIN, LOW);
-  }
+    memcpy((void *)&incomingData, incomingDataPtr, sizeof(incomingData));
 
-  if (joy2Y > 0)
-  {
-    digitalWrite(DIR_R_PIN, HIGH);
-  }
-  else if (joy2Y < 0)
-  {
-    digitalWrite(DIR_R_PIN, LOW);
-  }
+    joy1Y = incomingData.joy1;
+    joy2Y = incomingData.joy2;
 
-  if (incomingData.btn1) // Encender Brushless
-  {
-    valorPWM = microSegundosADutyCycle(PULSE_VELOCIDAD);
-  }
-  if (incomingData.btn2) // Apagar Brushless
-  {
-    valorPWM = microSegundosADutyCycle(PULSE_MIN);
-  }
+    // Dirección de motores
+    digitalWrite(DIR_L_PIN, (joy1Y > 0) ? HIGH : LOW);
+    digitalWrite(DIR_R_PIN, (joy2Y > 0) ? HIGH : LOW);
 
-  if (incomingData.btn3)
-  {
-    tackle();
+    // Control del brushless
+    if (incomingData.btn1)
+      setBrushlessSpeed(PULSE_VELOCIDAD);
+
+    if (incomingData.btn2)
+      setBrushlessSpeed(PULSE_MIN);
+
+    // Acciones
+    if (incomingData.btn3)
+      tackle();
+
+    if (incomingData.btn4)
+      moveServo();
+
+    /*Serial.printf("Data received -> Buttons: %d %d %d %d | Joysticks: %d | %d\n",
+                  incomingData.btn1, incomingData.btn2, incomingData.btn3,
+                  incomingData.btn4, joy1Y, joy2Y);*/
   }
-
-  if (incomingData.btn4)
-  {
-    moveServo();
-  }
-
-  ledcWrite(ledChannel, valorPWM);
-
-  Serial.println("Data received:");
-  Serial.print("  Buttons: ");
-  Serial.print(incomingData.btn1);
-  Serial.print(", ");
-  Serial.print(incomingData.btn2);
-  Serial.print(", ");
-  Serial.print(incomingData.btn3);
-  Serial.print(", ");
-  Serial.println(incomingData.btn4);
-  Serial.print("  Joysticks: ");
-  Serial.print(incomingData.joy1);
-  Serial.print(" | ");
-  Serial.println(incomingData.joy2);
 }
 
+// Setup
 void setup()
 {
   Serial.begin(115200);
-  Serial.println("DojoBot");
-  // Configurar el PWM del ESP32 para el ESC
+  // Serial.println("DojoBot iniciado");
+
+  // Configurar PWM del ESC
   ledcSetup(ledChannel, freq, resolution);
   ledcAttachPin(ESC_PIN, ledChannel);
-  // Calibración
-  ledcWrite(ledChannel, microSegundosADutyCycle(PULSE_MAX));
+
+  // Calibración del ESC
+  setBrushlessSpeed(PULSE_MAX);
   delay(3000);
-  ledcWrite(ledChannel, microSegundosADutyCycle(PULSE_MIN));
+  setBrushlessSpeed(PULSE_MIN);
   delay(1000);
 
+  // Servo
   servoMotor.attach(SERVO_PIN);
 
+  // Pines motores
   pinMode(DIR_L_PIN, OUTPUT);
   pinMode(STEP_L_PIN, OUTPUT);
   pinMode(DIR_R_PIN, OUTPUT);
   pinMode(STEP_R_PIN, OUTPUT);
-  pinMode(ENABLE_STEPPERS, OUTPUT);
+  pinMode(ENABLE_STEPPER_L, OUTPUT);
+  pinMode(ENABLE_STEPPER_R, OUTPUT);
 
+  // 🔥 Mantener steppers siempre activos
+  digitalWrite(ENABLE_STEPPER_L, LOW);
+  digitalWrite(ENABLE_STEPPER_R, LOW);
+
+  // Inicializar WiFi y ESP-NOW
   WiFi.mode(WIFI_STA);
-
   if (esp_now_init() != ESP_OK)
   {
-    Serial.println("Error initializing ESP-NOW");
+    // Serial.println("❌ Error inicializando ESP-NOW");
     return;
   }
 
   esp_now_register_recv_cb(onDataReceive);
-  Serial.println("ESP-NOW initialized, waiting for controller...");
+  // Serial.println("✅ ESP-NOW listo, esperando controlador...");
 }
 
+// Loop principal
 void loop()
 {
   if (!isTackling)
   {
-    if (joy1Y == 0)
-    {
-      digitalWrite(STEP_L_PIN, LOW);
-    }
-    else
+    int joy1 = joy1Y;
+    int joy2 = joy2Y;
+
+    // Si no hay entrada en ninguno, no mover
+    if (joy1 == 0 && joy2 == 0)
+      return;
+
+    // Mapeo de velocidad → delay
+    int delayL = map(abs(joy1), 0, 100, 1000, 300);
+    int delayR = map(abs(joy2), 0, 100, 1000, 300);
+
+    // Motor izquierdo
+    if (joy1 != 0)
     {
       digitalWrite(STEP_L_PIN, HIGH);
-      delayMicroseconds(800 - joy1Y * 2);
+      delayMicroseconds(delayL);
+      digitalWrite(STEP_L_PIN, LOW);
+      delayMicroseconds(delayL);
     }
 
-    if (joy2Y == 0)
-    {
-      digitalWrite(STEP_R_PIN, LOW);
-    }
-    else
+    // Motor derecho
+    if (joy2 != 0)
     {
       digitalWrite(STEP_R_PIN, HIGH);
-      delayMicroseconds(800 - joy2Y * 2);
+      delayMicroseconds(delayR);
+      digitalWrite(STEP_R_PIN, LOW);
+      delayMicroseconds(delayR);
     }
   }
 }
